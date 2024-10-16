@@ -49,19 +49,28 @@ check_and_create_directory() {
         log_warning "目录 /root/project/run_btc_testnet4 已存在。"
         read -p "是否删除该目录并重新克隆？[y/N] " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            rm -rf /root/project/run_btc_testnet4
+            # 终止占用该目录的进程并删除
+            fuser -k /root/project/run_btc_testnet4
+            sudo rm -rf /root/project/run_btc_testnet4
+
+            # 检查是否成功删除
+            if [ -d "/root/project/run_btc_testnet4" ]; then
+                log_error "目录未成功删除，请检查权限或占用情况。"
+                exit 1
+            fi
             log_success "已删除旧目录。"
         else
             log_warning "请手动清理目录后再运行此脚本。"
             exit 1
         fi
     fi
+
     mkdir -p "/root/project/run_btc_testnet4/data" || { log_error "目录创建失败！"; exit 1; }
     log_success "目录创建成功：/root/project/run_btc_testnet4"
 }
 
 # -----------------------------
-# Docker 和 Docker Compose 安装
+# 安装 Docker 和 Docker Compose
 # -----------------------------
 install_docker_and_compose() {
     if ! command -v docker &> /dev/null; then
@@ -80,7 +89,7 @@ install_docker_and_compose() {
     if ! command -v docker-compose &> /dev/null; then
         log_info "正在安装 Docker Compose..."
         curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        sudo chmod +x /usr/local/bin/docker-compose || { log_error "权限设置失败，请检查用户权限。"; exit 1; }
+        chmod +x /usr/local/bin/docker-compose || { log_error "权限设置失败，请检查权限。"; exit 1; }
         log_success "Docker Compose 安装成功。"
     fi
 }
@@ -91,6 +100,7 @@ install_docker_and_compose() {
 clone_and_start_container() {
     log_info "克隆 GitHub 仓库..."
     git clone https://github.com/rainbowprotocol-xyz/btc_testnet4 /root/project/run_btc_testnet4 || { log_error "克隆仓库失败！"; exit 1; }
+
     cd /root/project/run_btc_testnet4 || { log_error "无法进入目录 /root/project/run_btc_testnet4"; exit 1; }
 
     log_info "启动 Docker Compose..."
@@ -109,6 +119,19 @@ create_wallet_and_save_keys() {
     echo "地址: $WALLET_ADDRESS" > "$KEY_FILE"
     echo "私钥: $WALLET_PRIVATE_KEY" >> "$KEY_FILE"
     log_success "地址和私钥已保存到 $KEY_FILE"
+}
+
+# -----------------------------
+# 启动 RBO Worker
+# -----------------------------
+start_rbo_worker() {
+    log_info "启动 RBO Worker..."
+    git clone https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet "$RBO_PROJECT_PATH"
+    cd "$RBO_PROJECT_PATH"
+    wget https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet/releases/download/v0.0.1-alpha/rbo_worker
+    chmod +x rbo_worker
+    screen -S Rainbow -dm ./rbo_worker worker --rpc http://127.0.0.1:5000 --password demo --username demo --start_height 42000
+    log_success "RBO Worker 启动成功。"
 }
 
 # -----------------------------
@@ -140,3 +163,4 @@ main_menu() {
 # 运行主菜单
 # -----------------------------
 main_menu
+
