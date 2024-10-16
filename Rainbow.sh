@@ -42,41 +42,30 @@ log_error() {
 }
 
 # -----------------------------
-# 自定义变量
-# -----------------------------
-RPC_USER="demo"
-RPC_PASSWORD="demo"
-RPC_PORT=5000
-START_HEIGHT=42000
-DOCKER_IMAGE="mocacinno/btc_testnet4:bci_node"
-BTC_PROJECT_PATH="/root/project/run_btc_testnet4"
-RBO_PROJECT_PATH="/root/rbo_indexer_testnet"
-
-# -----------------------------
-# 创建并检查目录
+# 目录检查和清理
 # -----------------------------
 check_and_create_directory() {
-    if [ -d "$BTC_PROJECT_PATH" ]; then
-        echo "目录 $BTC_PROJECT_PATH 已存在。"
+    if [ -d "/root/project/run_btc_testnet4" ]; then
+        log_warning "目录 /root/project/run_btc_testnet4 已存在。"
         read -p "是否删除该目录并重新克隆？[y/N] " choice
         if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-            rm -rf "$BTC_PROJECT_PATH"
-            log_info "已删除旧目录。"
+            rm -rf /root/project/run_btc_testnet4
+            log_success "已删除旧目录。"
         else
             log_warning "请手动清理目录后再运行此脚本。"
             exit 1
         fi
     fi
-    mkdir -p "$BTC_PROJECT_PATH/data" || { log_error "目录创建失败！"; exit 1; }
-    log_success "目录创建成功：$BTC_PROJECT_PATH"
+    mkdir -p "/root/project/run_btc_testnet4/data" || { log_error "目录创建失败！"; exit 1; }
+    log_success "目录创建成功：/root/project/run_btc_testnet4"
 }
 
 # -----------------------------
-# 检查并安装 Docker 和 Docker Compose
+# Docker 和 Docker Compose 安装
 # -----------------------------
 install_docker_and_compose() {
     if ! command -v docker &> /dev/null; then
-        log_info "Docker 未安装，正在安装 Docker..."
+        log_info "正在安装 Docker..."
         apt-get update -y
         apt-get install -y apt-transport-https ca-certificates curl software-properties-common
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
@@ -86,17 +75,13 @@ install_docker_and_compose() {
         systemctl start docker
         systemctl enable docker
         log_success "Docker 安装成功。"
-    else
-        log_info "Docker 已安装，跳过安装步骤。"
     fi
 
     if ! command -v docker-compose &> /dev/null; then
         log_info "正在安装 Docker Compose..."
         curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose || { log_error "权限设置失败，请检查用户权限。"; exit 1; }
+        sudo chmod +x /usr/local/bin/docker-compose || { log_error "权限设置失败，请检查用户权限。"; exit 1; }
         log_success "Docker Compose 安装成功。"
-    else
-        log_info "Docker Compose 已安装，跳过安装步骤。"
     fi
 }
 
@@ -105,8 +90,8 @@ install_docker_and_compose() {
 # -----------------------------
 clone_and_start_container() {
     log_info "克隆 GitHub 仓库..."
-    git clone https://github.com/rainbowprotocol-xyz/btc_testnet4 "$BTC_PROJECT_PATH" || { log_error "克隆仓库失败！"; exit 1; }
-    cd "$BTC_PROJECT_PATH" || { log_error "无法进入目录 $BTC_PROJECT_PATH"; exit 1; }
+    git clone https://github.com/rainbowprotocol-xyz/btc_testnet4 /root/project/run_btc_testnet4 || { log_error "克隆仓库失败！"; exit 1; }
+    cd /root/project/run_btc_testnet4 || { log_error "无法进入目录 /root/project/run_btc_testnet4"; exit 1; }
 
     log_info "启动 Docker Compose..."
     sudo /usr/local/bin/docker-compose up -d || { log_error "启动 Docker 容器失败！"; exit 1; }
@@ -114,29 +99,16 @@ clone_and_start_container() {
 }
 
 # -----------------------------
-# 创建钱包并获取私钥
+# 创建钱包并保存密钥
 # -----------------------------
 create_wallet_and_save_keys() {
     log_info "创建钱包并获取地址和私钥..."
-    WALLET_ADDRESS=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$RPC_PORT getnewaddress)
-    WALLET_PRIVATE_KEY=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$RPC_PORT dumpprivkey "$WALLET_ADDRESS")
+    WALLET_ADDRESS=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=demo -rpcpassword=demo -rpcport=5000 getnewaddress)
+    WALLET_PRIVATE_KEY=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=demo -rpcpassword=demo -rpcport=5000 dumpprivkey "$WALLET_ADDRESS")
 
     echo "地址: $WALLET_ADDRESS" > "$KEY_FILE"
     echo "私钥: $WALLET_PRIVATE_KEY" >> "$KEY_FILE"
     log_success "地址和私钥已保存到 $KEY_FILE"
-}
-
-# -----------------------------
-# 启动 RBO Worker
-# -----------------------------
-start_rbo_worker() {
-    log_info "启动 RBO Worker..."
-    git clone https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet "$RBO_PROJECT_PATH"
-    cd "$RBO_PROJECT_PATH"
-    wget https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet/releases/download/v0.0.1-alpha/rbo_worker
-    chmod +x rbo_worker
-    screen -S Rainbow -dm ./rbo_worker worker --rpc http://127.0.0.1:$RPC_PORT --password $RPC_PASSWORD --username $RPC_USER --start_height $START_HEIGHT
-    log_success "RBO Worker 启动成功。"
 }
 
 # -----------------------------
@@ -154,7 +126,7 @@ main_menu() {
         echo "=================================================================="
         read -p "请选择操作 [1-5]: " option
         case $option in
-            1) check_and_create_directory; install_docker_and_compose; clone_and_start_container; create_wallet_and_save_keys; start_rbo_worker ;;
+            1) check_and_create_directory; install_docker_and_compose; clone_and_start_container; create_wallet_and_save_keys ;;
             2) start_rbo_worker ;;
             3) edit_principal ;;
             4) cleanup_and_remove_script ;;
@@ -168,4 +140,3 @@ main_menu() {
 # 运行主菜单
 # -----------------------------
 main_menu
-
