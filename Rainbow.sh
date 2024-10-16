@@ -53,13 +53,28 @@ BTC_PROJECT_PATH="/root/project/run_btc_testnet4"
 RBO_PROJECT_PATH="/root/rbo_indexer_testnet"
 
 # -----------------------------
-# 安装并启动节点
+# 创建并检查目录
 # -----------------------------
-install_and_start_node() {
-    log_info "创建 Bitcoin Testnet 项目目录..."
+check_and_create_directory() {
+    if [ -d "$BTC_PROJECT_PATH" ]; then
+        echo "目录 $BTC_PROJECT_PATH 已存在。"
+        read -p "是否删除该目录并重新克隆？[y/N] " choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            rm -rf "$BTC_PROJECT_PATH"
+            log_info "已删除旧目录。"
+        else
+            log_warning "请手动清理目录后再运行此脚本。"
+            exit 1
+        fi
+    fi
     mkdir -p "$BTC_PROJECT_PATH/data" || { log_error "目录创建失败！"; exit 1; }
+    log_success "目录创建成功：$BTC_PROJECT_PATH"
+}
 
-    # 检查 Docker 是否安装
+# -----------------------------
+# 检查并安装 Docker 和 Docker Compose
+# -----------------------------
+install_docker_and_compose() {
     if ! command -v docker &> /dev/null; then
         log_info "Docker 未安装，正在安装 Docker..."
         apt-get update -y
@@ -70,22 +85,38 @@ install_and_start_node() {
         apt-get install -y docker-ce docker-ce-cli containerd.io
         systemctl start docker
         systemctl enable docker
+        log_success "Docker 安装成功。"
+    else
+        log_info "Docker 已安装，跳过安装步骤。"
     fi
 
-    # 安装 Docker Compose
     if ! command -v docker-compose &> /dev/null; then
         log_info "正在安装 Docker Compose..."
         curl -L "https://github.com/docker/compose/releases/download/v2.20.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose || { log_error "权限设置失败，请检查用户权限。"; exit 1; }
+        log_success "Docker Compose 安装成功。"
+    else
+        log_info "Docker Compose 已安装，跳过安装步骤。"
     fi
+}
 
-    # 克隆仓库并启动容器
+# -----------------------------
+# 克隆仓库并启动容器
+# -----------------------------
+clone_and_start_container() {
     log_info "克隆 GitHub 仓库..."
-    git clone https://github.com/rainbowprotocol-xyz/btc_testnet4 "$BTC_PROJECT_PATH"
-    cd "$BTC_PROJECT_PATH"
-    docker-compose up -d || { log_error "启动 Docker 容器失败！"; exit 1; }
+    git clone https://github.com/rainbowprotocol-xyz/btc_testnet4 "$BTC_PROJECT_PATH" || { log_error "克隆仓库失败！"; exit 1; }
+    cd "$BTC_PROJECT_PATH" || { log_error "无法进入目录 $BTC_PROJECT_PATH"; exit 1; }
 
-    # 创建钱包并获取新地址和私钥
+    log_info "启动 Docker Compose..."
+    sudo /usr/local/bin/docker-compose up -d || { log_error "启动 Docker 容器失败！"; exit 1; }
+    log_success "Docker 容器启动成功。"
+}
+
+# -----------------------------
+# 创建钱包并获取私钥
+# -----------------------------
+create_wallet_and_save_keys() {
     log_info "创建钱包并获取地址和私钥..."
     WALLET_ADDRESS=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$RPC_PORT getnewaddress)
     WALLET_PRIVATE_KEY=$(docker exec -it $(docker ps -q -f "name=bitcoind") bitcoin-cli -testnet4 -rpcuser=$RPC_USER -rpcpassword=$RPC_PASSWORD -rpcport=$RPC_PORT dumpprivkey "$WALLET_ADDRESS")
@@ -96,49 +127,16 @@ install_and_start_node() {
 }
 
 # -----------------------------
-# 更新 rbo_worker
+# 启动 RBO Worker
 # -----------------------------
-update_script() {
-    log_info "更新 rbo_worker..."
-    rm -rf "$RBO_PROJECT_PATH"
+start_rbo_worker() {
+    log_info "启动 RBO Worker..."
     git clone https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet "$RBO_PROJECT_PATH"
     cd "$RBO_PROJECT_PATH"
     wget https://github.com/rainbowprotocol-xyz/rbo_indexer_testnet/releases/download/v0.0.1-alpha/rbo_worker
     chmod +x rbo_worker
     screen -S Rainbow -dm ./rbo_worker worker --rpc http://127.0.0.1:$RPC_PORT --password $RPC_PASSWORD --username $RPC_USER --start_height $START_HEIGHT
-    log_success "rbo_worker 已更新并启动。"
-}
-
-# -----------------------------
-# 查看日志
-# -----------------------------
-view_logs() {
-    log_info "查看 rbo_worker 日志..."
-    tail -f "$RBO_PROJECT_PATH/worker.log"
-}
-
-# -----------------------------
-# 清理脚本
-# -----------------------------
-cleanup_and_remove_script() {
-    log_warning "停止并删除 Docker 容器和文件..."
-    cd "$BTC_PROJECT_PATH" && docker-compose down
-    pkill -f rbo_worker
-    rm -rf "$BTC_PROJECT_PATH" "$RBO_PROJECT_PATH"
-    log_success "清理完成。"
-}
-
-# -----------------------------
-# 编辑 Principal ID
-# -----------------------------
-edit_principal() {
-    PRINCIPAL_FILE="$RBO_PROJECT_PATH/identity/identity.json"
-    if [ ! -f "$PRINCIPAL_FILE" ]; then
-        log_error "未找到 Principal 文件。"
-        return
-    fi
-    principal=$(grep '"principal"' "$PRINCIPAL_FILE" | awk -F: '{gsub(/"|,/, "", $2); print $2}')
-    echo "$principal"
+    log_success "RBO Worker 启动成功。"
 }
 
 # -----------------------------
@@ -156,8 +154,8 @@ main_menu() {
         echo "=================================================================="
         read -p "请选择操作 [1-5]: " option
         case $option in
-            1) install_and_start_node ;;
-            2) update_script ;;
+            1) check_and_create_directory; install_docker_and_compose; clone_and_start_container; create_wallet_and_save_keys; start_rbo_worker ;;
+            2) start_rbo_worker ;;
             3) edit_principal ;;
             4) cleanup_and_remove_script ;;
             5) view_logs ;;
